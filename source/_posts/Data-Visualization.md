@@ -4,9 +4,6 @@ date: 2017-12-29 19:24:31
 tags:
 ---
 
-login url: https://tw-aws-workshop.signin.aws.amazon.com/console
-user: twdatalab
-pwd:  datalab@ThoughtWorks
 ## 选择有效的图标
 
 ### 图标类型

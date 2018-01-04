@@ -56,18 +56,28 @@ description: Neural Networrk
 - V_t = ß * V_t-1 + (1 - ß) * µ_t
 
 ## 偏差修正:Bias Correction
-- V_t = V_t-1 / (1 - ß^t)
+- V_t = V_t-1 / (1 - ß^{t})
 
 ## 动量梯度下降: Momentum
 - 优点：比标准的梯度下降更快
 - 主要思想是计算梯度的指数加权平均
+> $$ \begin{cases}
+	v_{dW^{[l]}} = \beta v_{dW^{[l]}} + (1 - \beta) dW^{[l]} \\
+	W^{[l]} = W^{[l]} - \alpha v_{dW^{[l]}}
+	\end{cases}\tag{3}$$
 
 ## 均方根传递:Root Mean Square prop(RMSprop)
 - 优点：可以使用较大的学习率
-- 
-- S_dw = ß * S_dw + (1 - ß) * dw^2
+- 特点：垂直方向振幅小，水平方向速度快
+- S_dw = ß * S_dw + (1 - ß) * dw^{2}
 - W = W - œ * dw / √S_dw
-- 
+
+## 自适应距估计:Adam(Adaptive Monment Estimation)
+- 本质：将动量算法和RMSprop结合起来
+
+## 学习率衰减
+- œ_t = 1 / （1 + decay_rate * epoch_number）* œ_t
+- exponntially decay: œ_t = decay_rate * S^epoch_number
 
 ## 为什么要使用激活函数
  - 非线性：当激活函数是线性的时候，一个两层的神经网络就可以逼近基本上所有的函数了。但是，如果激活函数是恒等激活函数的时候，就不满足这个性质了，而且如果MLP使用的是恒等激活函数，那么其实整个网络跟单层神经网络是等价的。
