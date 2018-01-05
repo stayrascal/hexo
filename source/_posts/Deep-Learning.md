@@ -61,10 +61,9 @@ description: Neural Networrk
 ## 动量梯度下降: Momentum
 - 优点：比标准的梯度下降更快
 - 主要思想是计算梯度的指数加权平均
-> $$ \begin{cases}
-	v_{dW^{[l]}} = \beta v_{dW^{[l]}} + (1 - \beta) dW^{[l]} \\
-	W^{[l]} = W^{[l]} - \alpha v_{dW^{[l]}}
-	\end{cases}\tag{3}$$
+- V_dW^l = ß * V_dW^l + (1 - ß) dW^l
+- W^l = W^l - ß * V_dW^l
+
 
 ## 均方根传递:Root Mean Square prop(RMSprop)
 - 优点：可以使用较大的学习率
@@ -74,6 +73,9 @@ description: Neural Networrk
 
 ## 自适应距估计:Adam(Adaptive Monment Estimation)
 - 本质：将动量算法和RMSprop结合起来
+- ß_1: 0.9
+- ß_2:0.999
+- œ: 10-8
 
 ## 学习率衰减
 - œ_t = 1 / （1 + decay_rate * epoch_number）* œ_t
