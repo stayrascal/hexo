@@ -81,6 +81,41 @@ description: Neural Networrk
 - œ_t = 1 / （1 + decay_rate * epoch_number）* œ_t
 - exponntially decay: œ_t = decay_rate * S^epoch_number
 
+## Chainof assumptions in ML
+- 如果训练效果不是很好
+	* 增大网络结构
+	* 使用Adam优化算法
+- 如果训练集效果明显，但是验证集效果不好
+	* 正则化数据集
+	* 增大数据集
+- 如果训练集，验证集效果明显，但是测试集效果不明显
+	* 增大验证集
+- 如果所有数据集效果很好，但是现实环境中效果不明显
+	* 改变验证集分布
+	* 改变损失函数
+
+## 评估模型性能
+- 查准率P：模型所预测的数据集中，预测正确的比例 true positive / (True positive + False positive)
+- 查全率R：在所有的数据集中，预测正确的比例 True positive / (True positive + True negative)
+- F1-score：查准率和查全率的平均：2 / (1 / P + 1 / R)
+- 时间(statisticing metrics)
+
+## 误差分析
+- 获取预测错误的100个验证集，检查真实内容和预测结果
+- 统计错误分类的类别以及比例，确定调优优先级
+
+## 调试策略
+- Collect more data
+- Collect more diverse training set
+- Train algorithm longer with gradient descent
+- Try Adam instead of gradient descent
+- Try bigger/smaller network
+- Try dropout
+- Add L2 regularization
+- Wetwork architecture
+	* Activation functions
+	* hidden units
+
 ## 为什么要使用激活函数
  - 非线性：当激活函数是线性的时候，一个两层的神经网络就可以逼近基本上所有的函数了。但是，如果激活函数是恒等激活函数的时候，就不满足这个性质了，而且如果MLP使用的是恒等激活函数，那么其实整个网络跟单层神经网络是等价的。
  - 可微性：当优化方法是基于梯度的时候，这个性质是必须的。
