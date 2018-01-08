@@ -81,13 +81,16 @@ description: Neural Networrk
 - œ_t = 1 / （1 + decay_rate * epoch_number）* œ_t
 - exponntially decay: œ_t = decay_rate * S^epoch_number
 
-## Chainof assumptions in ML
+## Chain of assumptions in ML
 - 如果训练效果不是很好
 	* 增大网络结构
 	* 使用Adam优化算法
 - 如果训练集效果明显，但是验证集效果不好
 	* 正则化数据集
 	* 增大数据集
+	* 另外一个可能导致这个的原因是训练集和验证集的分布不同，解决办法是从训练集中分一部分来做验证集
+		- 如果和训练集同分布的验证集的效果和训练集效果相差较大的话，意味着有高方差/过拟合现象
+		- 如果和训练集同分的验证集效果同训练集相差不大，但是和原始验证集效果相差较大的话，这就是数据分布不一致造成的，解决方案是尝试分析训练集和验证集的区别，看是否能通过添加噪声数据的方式解决
 - 如果训练集，验证集效果明显，但是测试集效果不明显
 	* 增大验证集
 - 如果所有数据集效果很好，但是现实环境中效果不明显
@@ -115,6 +118,11 @@ description: Neural Networrk
 - Wetwork architecture
 	* Activation functions
 	* hidden units
+
+## When transfer learning makes sense
+- Task A and B have the same input x.
+- You have a lot more data for Task A than Task B.
+- Low level features from A could be helpful for learning B
 
 ## 为什么要使用激活函数
  - 非线性：当激活函数是线性的时候，一个两层的神经网络就可以逼近基本上所有的函数了。但是，如果激活函数是恒等激活函数的时候，就不满足这个性质了，而且如果MLP使用的是恒等激活函数，那么其实整个网络跟单层神经网络是等价的。
