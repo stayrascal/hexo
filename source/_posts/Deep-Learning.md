@@ -119,6 +119,12 @@ description: Neural Networrk
 	* Activation functions
 	* hidden units
 
+## Tips for doing well on bechmarks/winning competitions
+- Ensembling
+	* Train several networks independently and average their outputs
+- Multi-crop at test time
+	* run classifier on multiple versions of test images and average results
+
 ## When transfer learning makes sense
 - Task A and B have the same input x.
 - You have a lot more data for Task A than Task B.
