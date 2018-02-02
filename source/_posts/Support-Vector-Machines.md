@@ -43,16 +43,16 @@ description: 支持向量机制(SVM)是最好的现成的分类器，这里说�
 	        dataMat.append([float(lineArr[0]), float(lineArr[1])])
 	        labelMat.append(float(lineArr[2]))
 	    return dataMat, labelMat
-	
-	
+
+
 	# 随机选取一个小于size不等于inputNum的数
 	def selectRand(inputNum, size):
 	    result = inputNum
 	    while result == inputNum:
 	        result = int(random.uniform(0, size))
 	    return result
-	
-	
+
+
 	# 限制alpha的范围
 	def clopAlpha(alpha, high, low):
 	    if alpha > high:

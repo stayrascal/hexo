@@ -22,3 +22,9 @@ tags:
 
 ### 选择有效的图表
 - 当自由一两项数据需要分享时，直接使用数据本身
+
+
+### Microservice
+- DDD: https://thoughtworks.zoom.us/recording/play/dhuZzZ2A8roo543G1mbOnCB301D7gjfUk74KajT0sdEjhMa6BWeZrPTP-n-t3RLf
+- K8s: https://github.com/diannaowa
+- Contract Test: https://github.com/macdao/microservices-workshop-guanwei
