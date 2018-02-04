@@ -123,7 +123,7 @@ tags:
 ## 最简单的推荐机制 - 基于主体属性相似推荐
 
 ### 选择相似计算的过程
-- 夹角余弦可以有效规避个体相同认知中不同程度的差异表现，更注重维度之间的差异，而不注重数值上的差异，而欧式距离则是对个体异常数值会比较敏感。所以我们需要区分异常样本时，使用距离计算会更恰当，比如在计算电商领域中高价值与低价值用户的区分，我们的核心是想把他们的差异性拉大，才能体现出对比，这个时候使用余弦就是不合理的。
+> 夹角余弦可以有效规避个体相同认知中不同程度的差异表现，更注重维度之间的差异，而不注重数值上的差异，而欧式距离则是对个体异常数值会比较敏感。所以我们需要区分异常样本时，使用距离计算会更恰当，比如在计算电商领域中高价值与低价值用户的区分，我们的核心是想把他们的差异性拉大，才能体现出对比，这个时候使用余弦就是不合理的。
 
 ### 解决相似计算中，计算矩阵过大的问题
 > 假如有1万个物品，对每个物品来说需要计算与其它物品计算与其的相似度或者相关度，然后再排序，这样会进行1亿次计算，显然是不合理的，这个过程必须被优化，核心思想就是初筛，把没多大关系的直接去掉。常见的筛选方式是寻找核心关键影响因素，保证关键因素的相关性。在实际的生产操作过程中，很多时候会通过关键属性是否基本匹配作为判断依据，或者直接通过搜索构建进行检索初筛，这样已经能把大部分相关度低的候选集过滤掉，降低计算复杂度。
@@ -134,19 +134,256 @@ tags:
 ## 最简单的推荐策略算法实践
 
 ### 数据集
-- movies.data  (movieId::title:genre) 电影数据集
-- ratings.data (userId::movieId::rate::timestamp) 用户对电影的打分数据
-- tags.daga    (userId::movieId::tag::timestamp) 电影标签数据
+- movies.csv  (movieId,title,genre) 电影数据集
+- ratings.csv (userId,movieId,rating,timestamp) 用户对电影的打分数据
+- tags.csv    (userId,movieId,tag,timestamp) 电影标签数据
 
 ### 推荐机制逻辑
-- 电影的类别：电影类别信息以一对多的关系存储于电影数据集中
-- 电影的播放年份
-- 电影的标签
-- 电影的名称
-- 候选集电影的评分
+- 电影的类别：电影类别信息以一对多的关系存储于电影数据集中，需要进行切割
+- 电影的播放年份：电影的年份其实有种潜在的关联关系，这些数据隐藏在电影的名字中，需正则过滤出来，可以通过差距来计算维度的相关
+- 电影的标签：即用户对电影打的标签信息，需经过清洗、规整以及处理后变成电影的属性，标签是多对多的关系，可以通过计算欧式或者余弦计算相似度
+- 电影的名称：从某种程度上来说，名称可以体现相关性，经过分词去除停词后以词维度进行余弦计算
+- 候选集电影的评分：一个电影对应多个评分，需要进行归一化计算，简单的做法是计算整体评分的平均值
+
+### 代码逻辑
+> **Spark2.0之后，不再构建sparkcontext了，创建一个复合多功能的SparkSession替代，可以从HDFS读取文件，也可以从Hive中获取DataFrame**
+
+```
+val HIVE_METASTORE_URIS = "thrift://localhost:9083"
+val spark = SparkSession.builder()
+      .appName("Base content Recommend")
+      .config("hive.metastore.uris", HIVE_METASTORE_URIS)
+      .enableHiveSupport()
+      .getOrCreate()
+```
+
+> **先将数据load到Hive中，然后spark直接从Hive中读取DataFrame/RDD**
+
+```
+create external table if not exists mite8.mite_movies(movieId INT, title STRING, genres STRING) comment 'tags' row format delimited fields terminated by ',' stored as textfile location '/tmp/movies' tblproperties("skip.header.line.count"="1");
+
+create external table if not exists mite8.mite_ratings(userId INT, movieId INT, rating FLOAT, `timestamp` INT) comment 'ratings' row format delimited fields terminated by ',' stored as textfile location '/tmp/ratings' tblproperties("skip.header.line.count"="1");
+
+create external table if not exists mite8.mite_tags(userId INT, movieId INT, tag STRING, `timestamp` INT) comment 'tags' row format delimited fields terminated by ',' stored as textfile location '/tmp/tags' tblproperties("skip.header.line.count"="1");
+```
+
+```
+val movieAvgRate = spark.sql("select movieId, round(avg(rating)) as avg_rate from mite8.mite_ratings group by movieId").rdd
+      .filter(_.get(0) != null).map { f => (f.get(0).toString.toInt, f.get(1).toString.toDouble) }
+
+val moviesData = spark.sql("select movieId, title, genres from mite8.mite_movies").rdd
+
+val tagsData = spark.sql("select movieId, tag from mite8.mite_tags").rdd
+```
+
+> **对tags标签进行处理，包括分词，去除停用词**
+
+```
+val tagsStandardize = tagsData.filter(_.get(0) != null).map { row =>
+  val movieId = row.get(0).toString.toInt
+  val tag = if (row.get(1).toString.split(" ").length <= 3) row.get(1).toString else HanLP.extractKeyword(row.get(1).toString, 20).toArray.toSet.mkString(" ")
+  (movieId, tag)
+}
+```
+
+> **统计tag频度，取前10个作为电影的tag属性**
+
+```
+val movieTag = tagsStandardize.reduceByKey(_ + _).groupBy(k => k._1._1).map { f =>(f._1, f._2.map { ff => (ff._1, ff._2)}.toList.sortBy(_._2).reverse.take(10).toMap)
+}
+```
+
+> **处理年龄、年份、名称**
+
+```
+val moviesGenresTitleYear = moviesData.filter(_.get(0) != null).map { f =>
+  val movieId = f.get(0).toString.toInt
+  val title = f.get(1).toString
+  val genres = f.get(2).toString.split("|").toList.take(10)
+  val titleWords = HanLP.extractKeyword(title.toString, 10)
+  val year = MovieYearRegex.movieYearReg(title.toString)
+  (movieId, (genres, titleWords, year))
+}
+```
+
+> **提取年份的正则如下：**
+
+```
+object MovieYearRegex {
+  val moduleType = ".*\\(([1-9][0-9][0-9][0-9])\\).*"
+
+  def movieYearReg(str: String): Int = {
+    var retYear = 1994
+    val pattern = Pattern.compile(moduleType)
+    val matcher = pattern.matcher(str)
+    while (matcher.find()) {
+      retYear = matcher.group(1).toInt
+    }
+    retYear
+  }
+}
+```
+
+> **通过join进行数据合并，生成一个以movieId为核心的属性集合**
+
+```
+val movieContent = movieTag.join(movieAvgRate).join(moviesGenresTitleYear).map(
+  // movieTag: (movieId, Map((movieId, tag), count))
+  // movieAvgRate: (movieId, avgRate)
+  // moviesGenresTitleYear: (movieId, (genres, titleList, year))
+  // (movie, tagList, titleList, year, genreList, rate)
+  f => (f._1, f._2._1._1, f._2._2._2, f._2._2._3, f._2._2._1, f._2._1._2)
+)
+```
+
+> **使用余弦相似度计算内容的相似性，排序之后取前20作为推荐列表(只推荐优质电影)**
+
+
+```
+val movieContentTmp = movieContent.filter(f => f._6.asInstanceOf[java.math.BigDecimal].doubleValue() > 3.5).collect()
+
+val movieContentBase = movieContent.map {
+  f =>
+    val currentMovieId = f._1
+    val currentTagList = f._2
+    val currentTitleWorldList = f._3
+    val currentYear = f._4
+    val currentGenreList = f._5
+    val currentRate = f._6.asInstanceOf[java.math.BigDecimal].doubleValue()
+    val recommendMovies = movieContentTmp.map {
+      ff =>
+        val tagSimi = getCosTags(currentTagList, ff._2)
+        val titleSimi = getCosList(currentTitleWorldList, ff._3)
+        val genreSimi = getCosList(currentGenreList, ff._5)
+        val yearSimi = getYearSimi(currentYear, ff._4)
+        val rateSimi = getRateSimi(ff._6.asInstanceOf[java.math.BigDecimal].doubleValue())
+        val score = 0.4 * genreSimi + 0.25 * tagSimi + 0.1 * yearSimi + 0.05 * titleSimi + 0.2 * rateSimi
+        (ff._1, score)
+    }.toList.sortBy(k => k._2).reverse.take(20)
+    (currentMovieId, recommendMovies)
+}.flatMap(f => f._2.map(k => (f._1, k._1, k._2))).map(f => Row(f._1, f._2, f._3))
+```
+
+> **相似度计算函数**
+
+```
+def getCosTags(tags1: Map[(Int, String), Int], tags2: Map[(Int, String), Int]): Double = {
+    var xySum: Double = 0
+    var aSquareSum: Double = 0
+    var bSquareSum: Double = 0
+
+    val tagsA = tags1.keys.toList
+    val tagsB = tags2.keys.toList
+    tagsA.union(tagsB).foreach {
+      f => {
+        if (tagsA.contains(f)) aSquareSum += tags1(f) * tags1(f)
+        if (tagsB.contains(f)) bSquareSum += tags2(f) * tags2(f)
+        if (tagsA.contains(f) && tagsB.contains(f)) xySum += tags1(f) * tags2(f)
+      }
+    }
+
+    if (aSquareSum != 0 && bSquareSum != 0) {
+      xySum / (Math.sqrt(aSquareSum) * Math.sqrt(bSquareSum))
+    } else {
+      0
+    }
+}
+
+def getCosList(tags1: java.util.List[String], tags2: java.util.List[String]): Double = {
+    var xySum: Double = 0
+    var aSquareSum: Double = 0
+    var bSquareSum: Double = 0
+
+    tags1.union(tags2).foreach {
+      f => {
+        if (tags1.contains(f)) aSquareSum += 1
+        if (tags2.contains(f)) bSquareSum += 1
+        if (tags1.contains(f) && tags2.contains(f)) xySum += 1
+      }
+    }
+
+    if (aSquareSum != 0 && bSquareSum != 0) {
+      xySum / (Math.sqrt(aSquareSum) * Math.sqrt(bSquareSum))
+    } else {
+      0
+    }
+}
+
+def getYearSimi(year1: Int, year2: Int): Double = {
+    val count = Math.abs(year1 - year2)
+    if (count > 10) 0 else (1 - count) / 10
+  }
+
+  def getRateSimi(rate: Double): Double = {
+    if (rate >= 5) 1 else rate / 5
+}
+```
+
+> **将结果存入Hive**
+
+```
+val schemaString2 = "movieId recommendMovieId score"
+val schemaContentBase = StructType(schemaString2.split(" ")
+  .map(fieldName => StructField(fieldName, if (fieldName.equals("score")) DoubleType else StringType, nullable = true)))
+val movieContentBaseDataFrame = spark.createDataFrame(movieContentBase, schemaContentBase)
+
+val userTagTmpTableName = "mite_content_base_tmp"
+val userTagTableName = "mite8.mite_content_base_reco"
+movieContentBaseDataFrame.createOrReplaceTempView(userTagTmpTableName)
+
+spark.sql("insert into table " + userTagTableName + " select * from " + userTagTmpTableName)
+
+spark.stop()
+```
+
+# 基于用户画像的个性推荐
+
+## 个性化与用户画像
+> 个性化一定与人相关，每个人可能都有自己的个性，一个好的推荐系统推荐的信息需要满足用户的个性，才具有足够的智能
+
+> 要实现推荐个性化，需要对用户进行分析，分析用户的偏好，根据偏好来做推荐。分析用户的偏好核心还是用户画像的分析，然后基于用户画像属性进行推荐
+![](https://mmbiz.qpic.cn/mmbiz_png/wvkocF2MXjVPzXic3UE2w5YC4B2NXuJk2oib6RsK3la9bvRaiab4u2dsjoWVONpJlicdsyGQUjeWDbczBVQDgUp1jg/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1)
+
+## 基于用户画像的个性化推荐策略
+- 先根据行为数据，进行用户画像描述抽取
+- 再结合用户画像数据为用户进行信息推荐
+
+## 数据源
+- 用户对电影的标签数据
+- 用户对电影的评分数据
+
+### 用户兴趣标签提取
+- 用户对电影类目偏好数据，即用户对那些类目偏好
+- 用户的偏好兴趣标签，即通过用户对电影的偏好标签打标行为，提取用户的兴趣标签
+- 用户的偏好年份，通过打分数据，描述用户偏好那个年代的电影
+
+#### 用户的偏好标签
+> 我们拥有的是用户对电影的打标行为数据，实际上这是电影层级的标签，我们需要在这个基础上，为用户映射这些特征标签。所以我们需要对单个用户的所有打标签进行合并，然后如果用户对刚好打标的电影有评分的话，再带上评分权重，最终合并这些标签，形成基于频度、评分用户带权重的标签集，这就是用户的一些兴趣点
+
+#### 用户对电影的类目偏好
+> 通过评分表，把对应所有的电影都取出来，然后分析其类目，将评分作为对应类目的权重，然后将类目进行合并，最终求取用户的类目偏好合集
+
+#### 用户的偏好年份
+> 过程与取类目的过程类似，最终获取到年份偏好
+
+### 电影数据的处理
+> 再已经获取用户层级的画像属性信息之后，我们需要绘制候选集电影的属性，对应用户的三个属性，其中年份、类目直接存放与电影表中，唯一需要额外处理的是特征tag。由于不同人对不同电影进行Tag标记，而且在进行用户画像绘制的时候，是以人为维度的，现在需要以电影为维度，进行标签合并，最终形成电影维度的标签集
+
+### 关联推荐计算
+> 每个维度分别进行计算相似度或者相关度，然后不同维度进行合并归一计算最终用户与电影的相关度。最外层依然以权重模型去做，类目最重要，其次是Tag，最后才是年份属性，最终怎么调整还是需要根据实际反馈数据来做微调
+![](https://mmbiz.qpic.cn/mmbiz_png/wvkocF2MXjVPzXic3UE2w5YC4B2NXuJk2p74XVDfXicDZgd18L8Jue3iblxfz0HBdlNseibXg18DLSysPRsgzWzm6A/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1)
+
+### 代码逻辑
+
+> **获取数据与上一节类似**
+
+> **先进行movie候选集的处理，包括Tag预处理，合并，以及类目年份的提取**
 
 
 
 
 
-- jupyter hub 不知道单前用户是谁
+
+
+
+
