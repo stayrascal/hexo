@@ -375,10 +375,266 @@ spark.stop()
 
 ### 代码逻辑
 
+#### **先进行movie候选集的处理，包括Tag预处理，合并，以及类目年份的获取**
+
 > **获取数据与上一节类似**
 
-> **先进行movie候选集的处理，包括Tag预处理，合并，以及类目年份的提取**
+> **获取每部电影的平均分数**
 
+```
+val movieAvgRate = spark.sql("select movieId, round(avg(rating)) as avg_rate from mite8.mite_ratings group by movieId").rdd
+      .filter(_.get(0) != null)
+      .map(f => (f.get(0).toString.toInt, f.get(1).toString.toDouble))
+```
+
+> **先进行tag候选集的处理**
+
+```
+val tagsData = spark.sql("select movieId, tag from mite8.mite_tags").rdd
+val tagsStandardize = tagsData
+  .filter(_.get(0) != null)
+  .map { row =>
+    val movieId = row.get(0).toString.toInt
+    val tag = if (row.get(1).toString.split(" ").length <= 3) row.get(1).toString else HanLP.extractKeyword(row.get(1).toString, 20).toArray.toSet.mkString(" ")
+    (movieId, tag)
+  }
+```
+> **将预处理之后的movie-tag数据进行统计频度，直接作为tag权重,形成(movie,tagList(tag,score))数据形态**
+
+```
+// (movieId, Map(tag, count)
+val movieTagList = tagsStandardize
+  .map(item => ((item._1, item._2), 1))
+  .reduceByKey(_ + _)
+  .groupBy(_._1._1)
+  .map { f =>
+    (f._1,
+      f._2
+        .map(ff => (ff._1._2, ff._2))
+        .toList
+        .sortBy(_._2)
+        .reverse
+        .take(10)
+        .toMap
+    )
+  }
+```
+
+> **抽取电影类别、年份属性**
+
+```
+val moviesData = spark.sql("select movieId, title, genres from mite8.mite_movies").rdd
+val moviesGenresYear = moviesData
+  .filter(_.get(0) != null)
+  .map { f =>
+    val movieId = f.get(0).toString.toInt
+    val genres = f.get(2).toString
+    val year = MovieYearRegex.movieYearReg(f.get(1).toString)
+    (movieId, (genres, year))
+  }
+```
+
+> **合并不同属性**
+
+```
+// movieId, tagList(Map(tag, count)), genre, year, rate
+val movieContent = movieTagList
+  .join(movieAvgRate)
+  .join(moviesGenresYear)
+  .filter(_._2._1._2 > 2.5) // rate > 2.5
+  .sortBy(_._2._1._2, false)
+  .map(f => (f._1, f._2._1._1, f._2._2._1, f._2._2._2, f._2._1._2)).collect()
+```
+
+#### **获取用户画像属性**
+
+> **先通过rating评分表与tags表进行关联join，获取用户直接与tag的关联关系**
+
+```
+val tagSchema = "movieId tag"
+val schema = StructType(tagSchema.split(" ").map(fieldName => StructField(fieldName, StringType, true)))
+
+val tagsSimiDataFrame = spark.createDataFrame(tagsStandardize.map(item => Row(item._1, item._2)), schema)
+
+val ratingData = spark.sql("select userId, movieId, rate from mite8.mite_ratings")
+
+val tagRateDataFrame = ratingData
+  .join(tagsSimiDataFrame, ratingData("movieId") === tagsSimiDataFrame("movieId"), "inner")
+  .select("useId", "tag", "rate")
+```
+
+> **将(userId, tag, rate)中(userId, tag)相同的分数rate相加**
+
+```
+val userPortraitTag = tagRateDataFrame
+  .groupBy("userId", "tag")
+  .sum("rate").rdd
+  .map {
+    f => (f.get(0).toString.toInt, f.get(1).toString, f.get(2).asInstanceOf[java.math.BigDecimal].doubleValue())
+  }
+  .groupBy(_._1)
+  .map { item =>
+    val userId = item._1
+    val tagList = item._2.toList.sortBy(_._3).reverse.map(k => (k._2, k._3)).take(20) // (tag, rate)
+    (userId, tagList.toMap)
+  }
+```
+
+> **处理Year属性**
+
+```
+// (userId, year, rate)
+val userYear = ratingData.rdd
+  .map(f => (f.get(1).toString.toInt, (f.get(0).toString.toInt, f.get(2).toString.toDouble))) // (movieId, (userId, rate))
+  .join(moviesGenresYear) // (movieId, (genres, year))
+  .map(f => (f._2._1._1, f._2._2._2, f._2._1._2))
+
+val userPortraitYear = userYear
+  .groupBy(_._1)
+  .map { f =>
+    val userId = f._1
+    val yearList = f._2.map(ff => (ff._2, ff._3.asInstanceOf[java.math.BigDecimal].doubleValue())).toList.take(10)
+    (userId, yearList)
+  }
+```
+
+> **处理genre偏好**
+
+```
+// (userId, genre. rate)
+val userGenre = ratingData.rdd
+  .map(f => (f.get(1).toString.toInt, (f.get(0).toString.toInt, f.get(2).toString.toDouble))) // (movieId, (userId, rate))
+  .join(moviesGenresYear) // (movieId, (genres, year))
+  .map(f => (f._2._1._1, f._2._2._1, f._2._1._2))
+
+val userPortraitGenre = userGenre
+  .groupBy(_._1)
+  .map { f =>
+    val userId = f._1
+    val genreList = f._2.map(ff => (ff._2, ff._3.asInstanceOf[java.math.BigDecimal].doubleValue())).toList.take(10)
+    (userId, genreList)
+  }
+```
+
+> **获取用户的观看列表,在获取推荐列表之后移除已观看的电影**
+
+```
+// ratingData: (userId, movieId, rate)
+val userMovieGet = ratingData.rdd.map(x => (x.get(0).toString.toInt, x.get(1).toString.toInt)).groupByKey()
+```
+
+> **计算相似度**
+
+```
+val portraitBaseReData = userPortraitTag // (userId, tags:Map(tag, rate))
+  .join(userPortraitYear) // (userId, yearList)
+  .join(userPortraitGenre) // (userId, genreList)
+  .join(userMovieGet) // (userId, movieIds)
+  .map { f =>
+  val userId = f._1
+  val userTag = f._2._1._1._1 // Map(tag, rate)
+val userYear = f._2._1._1._2 // List[(year, rate)]
+val userGenre = f._2._1._2 // // List[(gnere, rate)]
+val userMovieList = f._2._2.toList
+  val movieRe = movieContent.map { ff =>
+    val movieId = ff._1
+    val movieTag = ff._2 // Map(tag, count)
+  val movieGenre = ff._3
+    val movieYear = ff._4
+    val movieRate = ff._5
+    val simiScore = getSimiScore(userTag, movieTag, userGenre, movieGenre, userYear, movieYear, movieRate)
+    (movieId, simiScore)
+  }.diff(userMovieList).sortBy(_._2).reverse.take(20)
+  (userId, movieRe)
+}.flatMap(f => f._2.map(ff => (f._1, ff._1, ff._2)))
+```
+
+> **其它相关函数**
+
+```
+def getCosList(tags1: java.util.List[String], tags2: java.util.List[String]): Double = {
+    var xySum: Double = 0
+    var aSquareSum: Double = 0
+    var bSquareSum: Double = 0
+
+    tags1.union(tags2).foreach {
+      f => {
+        if (tags1.contains(f)) aSquareSum += 1
+        if (tags2.contains(f)) bSquareSum += 1
+        if (tags1.contains(f) && tags2.contains(f)) xySum += 1
+      }
+    }
+
+    if (aSquareSum != 0 && bSquareSum != 0) {
+      xySum / (Math.sqrt(aSquareSum) * Math.sqrt(bSquareSum))
+    } else {
+      0
+    }
+}
+
+def getYearSimi(year1: Int, year2: Int): Double = {
+    val count = Math.abs(year1 - year2)
+    if (count > 10) 0 else (1 - count) / 10
+}
+
+def getRateSimi(rate: Double): Double = {
+    if (rate >= 5) 1 else rate / 5
+}
+
+def getCosTags(userTag: Map[String, Double], movieTag: Map[String, Int]): Double = {
+    var scores: Double = 0
+    val tags = movieTag.keys.toList.union(userTag.keys.toList)
+
+    tags.foreach { tag =>
+      scores += userTag.get(tag).getOrElse(0.0) * movieTag.get(tag).getOrElse(0)
+    }
+    scores / tags.length
+}
+
+def getGenre(userGenre: List[(String, Double)], movieGenre: String): Double = {
+    userGenre.toMap.get(movieGenre).getOrElse(0)
+}
+
+def getYear(userYear: List[(Int, Double)], movieYear: Int): Double = {
+    var scores: Double = 0
+    val userYears = userYear.toMap.keys.toList
+    userYears.foreach { year =>
+      scores += getYearSimi(year, movieYear)
+    }
+    scores / userYears.length
+}
+
+def getSimiScore(userTag: Map[String, Double], // Map(tag, rate)
+                   movieTag: Map[String, Int], // Map(tag, count)
+                   userGenre: List[(String, Double)], // List[(genre, rate)]
+                   movieGenre: String,
+                   userYear: List[(Int, Double)], // List[(year, rate)]
+                   movieYear: Int,
+                   movieRate: Double): Double = {
+    val tagSimi = getCosTags(userTag, movieTag)
+    val genreSimi = getGenre(userGenre, movieGenre)
+    val yearSimi = getYear(userYear, movieYear)
+    val rateSimi = getRateSimi(movieRate)
+    val score = 0.4 * genreSimi + 0.3 * tagSimi + 0.1 * yearSimi + 0.2 * rateSimi
+    score
+}
+```
+
+> **储存结果**
+
+```
+val schemaPortraitStr = "userId movieId score"
+val schemaPortrait = StructType(schemaPortraitStr.split(" ").map(fieldName => StructField(fieldName, if (fieldName.equals("score")) DoubleType else StringType, true)))
+val portraitBaseReDataFrame = spark.createDataFrame(portraitBaseReData
+  .map(f => Row(f._1, f._2, f._3)), schemaPortrait)
+
+val portraitBaseReTmpTableName = "mite_portrait_base_tmp"
+val portraitBaseTableName = "mite8.mite_portrait_base_re"
+portraitBaseReDataFrame.createOrReplaceTempView(portraitBaseReTmpTableName)
+spark.sql("insert into table " + portraitBaseTableName + " select * from " + portraitBaseReTmpTableName)
+
+spark.stop()
+```
 
 ### 注意事项
 
@@ -386,7 +642,7 @@ spark.stop()
 > 用户的行为数据有时候并不是其兴趣特点所表现，比如如果系统把一些信息故意放在很显眼的位置，对于一般用户来说，不点也得点了，就会造成用户数据其实不那么靠谱。
 > 如果用户产生了行为数据，但是行为数据不足够多，这个时候这些行为数据是有置信度的考量的，行为数据不够产生的描述可能会形成偏差，如果根据偏差去做推荐的话，结果可能会很离谱。
 
-***用户兴趣实效性问题*
+**用户兴趣实效性问题**
 > 在上面的实验中，我们并没有对用户的行为数据做更多的过滤，而实际的操作中，用户的兴趣是有一定时效性的。用户的兴趣可能已经随时间偏移了，过去喜欢的东西已经不喜欢了。所以一般在实际操作过程中，一定要分辨用户的兴趣数据的有效性，一般情况下，我们会进行长期兴趣和短期兴趣的区分，人在一定时间内其兴趣是固定的，并且在一些很短暂的时间段内，其关注点事有一定意义的，这个时候其短期兴趣就生效了，所以，在实际操作的时候，长期兴趣、短期兴趣的具体的应用需要结合实际的场景区分，需要注意原始数据是否适合做兴趣描述的来源数据，是否已经失效
 
 **冷启动问题**
@@ -428,7 +684,7 @@ spark.stop()
 > 最近邻模型，即使用用户的偏好信息，计算单前被推荐用户与其它用户的距离，然后根据近邻进行单前用户对于物品的评分预测，典型的如K最近邻模型，假如我们使用皮尔森相关系数，计算当前用户与其它用户的相似度sim，然后在K个近邻中，通过这些相似用户，预测当前用户对于每一饿物品的评分，然后重新排序，最终推出M个评分最高的物品推荐出去，需要注意的是，基于近邻的协同推荐，比较依赖当前被推荐用户的历史数据，这样计算出来的相关度才更准确
 
 **SVD矩阵分解**
-> 我们把用户和物品的对应关系可以看作是一个矩阵X，然后矩阵X可以分解为X=A*B，为了满足这种分解，每个用户对应于物品都有评分，必定存在某组隐含的因子，使得用户对于物品的评分逼近真实值，而我们的目标就是通过分解矩阵得到这些隐性因子，并且通过这些因子来预测还未评分的物品。
+> 对于一个user-prodcts-rating的评分数据集，我们把用户和物品的对应关系可以看作是一个矩阵X，然后矩阵X可以分解为X=A*B。 但是在这个数据集中，并不是每个用户都对每个产品进行过评分，所以存在着一些缺失值，为了满足这种分解，每个用户对应于物品都有评分，必定存在某组隐含的因子，使得用户对于物品的评分逼近真实值，而我们的目标就是通过分解矩阵得到这些隐性因子，并且通过这些因子来预测还未评分的物品。
 
 > 有两种办法来学习隐性因子，一个是ALS交叉最小二乘法，另一个是随机梯度下降法，首先对ALS来说，首先随机化矩阵A，然后通过目标函数求B，然后对B进行归一化处理，反过来求A，不断迭代，直到A*B满足一定的收敛条件即停止。对于随机梯度下降来说，首先目标函数是凹函数或者是凸函数，通过调整因子矩阵使得我们的目标沿着凹函数的最小值，或者凸函数的最大值移动，最终到达移动阈值或者两个函数变化绝对值小雨阈值，停止因子矩阵的变化，得到的函数即为隐性因子
 
