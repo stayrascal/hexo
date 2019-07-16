@@ -231,7 +231,7 @@ description: Neural Networrk
 ## 防止过拟合方法
 - Data augmentation
 - Early stopping
-- 
+-
 - L2正则化
 	* 对于网络中的每个权重w，向目标函数中增加一个`0.5λw^2`，其中λ是正则化强度
 	* L2正则化可以直观理解为它对于大数值的权重向量进行严厉惩罚，倾向于更加分散的权重向量。
@@ -273,16 +273,16 @@ description: Neural Networrk
 
 	<img src="http://chart.googleapis.com/chart?cht=tx&chl=\displaystyle L_i=\sum_{j\not=y_i}max(0,f_j-f_{y_i}+1)" style="border:none;">
 - 第二个常用的损失函数是Softmax分类器，它使用交叉熵损失：
-	
+
 	<img src="http://chart.googleapis.com/chart?cht=tx&chl=\displaystyle L_i=-log(\frac{e^{f_{y_i}}}{\sum_je^{f_j}})" style="border:none;">
 - 当类别数目巨大时，就需要使用分层Softmax（Hierarchical Softmax），分层softmax将标签分解成一个树。每个标签都表示成这个树上的一个路径，这个树的每个节点处都训练一个Softmax分类器来在左和右分枝之间做决策。树的结构对于算法的最终结果影响很大
 - 属性（Attribute）分类：当每个样本含有多个正确的标签y时。
 	* 在这种情况下，一个明智的方法是为每个属性创建一个独立的二分类的分类器。
-	
+
 		<img src="http://chart.googleapis.com/chart?cht=tx&chl=\displaystyle L_i=\sum_jmax(0,1-y_{ij}f_j)" style="border:none;">
 		- 上式中，求和是对所有分类j，Yij的值为1或者-1，具体根据第i个样本是否被第j个属性打标签而定，当该类别被正确预测并展示的时候，分值向量Fj为正，其余情况为负。可以发现，当一个正样本的得分小于+1，或者一个负样本得分大于-1的时候，算法就会累计损失值。
 	* 另一种方法是对每种属性训练一个独立的逻辑回归分类器
-	
+
 		<img src="http://chart.googleapis.com/chart?cht=tx&chl=\displaystyle P(y=1|x;w,b)=\frac{1}{1+e^{-(w^Tx+b)}}=\sigma(w^Tx+b)" style="border:none;">
 - 回归问题
 	* 对于这种问题，通常是计算预测值和真实值之间的损失。然后用L2平方范式或L1范式度量差异
@@ -299,7 +299,7 @@ description: Neural Networrk
 ## 梯度检查
 - 把解析梯度和数值计算梯度进行比较。
 - 使用中心化公式计算数值梯度：
-	
+
 	<img src="http://chart.googleapis.com/chart?cht=tx&chl=\displaystyle \frac{df(x)}{dx}=\frac{f(x+h)-f(x-h)}{2h}" style="border:none;">
 - 使用相对误差来比较：
 
@@ -360,7 +360,7 @@ description: Neural Networrk
 		* 中后期，分母上梯度平方的累加将会越来越大，使gradient->0，使得训练提前结束
 - Adadelta
 	* Adadelta是对Adagrad的扩展，最初方案依然是对学习率进行自适应约束，但是进行了计算上的简化。 Adagrad会累加之前所有的梯度平方，而Adadelta只累加固定大小的项，并且也不直接存储这些项，仅仅是近似计算对应的平均值。
-	* N_t = v * N_t-1 + (1 - v) * Gt^2 
+	* N_t = v * N_t-1 + (1 - v) * Gt^2
 	* 经过近似牛顿迭代法处理之后，Adadelta已经不用依赖于全局学习率了:E|g^2|_t=p*E|g^2|_t-1+(1-p)*g_t^2
 	* 特点：
 		* 训练初中期，加速效果不错，很快
@@ -380,7 +380,7 @@ description: Neural Networrk
 		* 也适用于大多非凸优化 - 适用于大数据集和高维空间
 - Adamax
 	* Adamax是Adam的一种变体，此方法对学习率的上限提供了一个更简单的范围。
-- Nadam
+- Aadam
 	* Nadam类似于带有Nesterov动量项的Adam。
 	* Nadam对学习率有了更强的约束，同时对梯度的更新也有更直接的影响。
 - 总结
