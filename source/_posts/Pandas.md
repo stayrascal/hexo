@@ -37,3 +37,14 @@ tags: Python
 - pd.merge(left, right, on='column'):横向合并
 - df.append(s, ignore_index=True):添加新的一行
 - df.groupby(['column1', 'column2'])
+
+
+### 小技巧
+- df[numerical_features].hist(bins=30, figsize=(10, 7))
+- 
+    ```
+    fig, ax = plt.subplots(1, 3, figsize=(14, 4))
+    df[df.Churn == "No"][numerical_features].hist(bins=30, color="blue", alpha=0.5, ax=ax)
+    df[df.Churn == "Yes"][numerical_features].hist(bins=30, color="red", alpha=0.5, ax=ax)
+    ```
+- 
